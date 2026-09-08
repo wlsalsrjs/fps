@@ -1,15 +1,37 @@
+import streamlit as st
+import streamlit.components.v1 as components
+
+# 1. 스트림릿 페이지 기본 설정
+st.set_page_config(
+    page_title="Streamlit 3D FPS Game",
+    page_icon="🎮",
+    layout="wide"
+)
+
+# 사이드바 및 UI 타이틀
+st.title("🎮 Streamlit 3D FPS Game")
+st.sidebar.header("게임 조작법")
+st.sidebar.markdown("""
+- **이동**: `W`, `A`, `S`, `D`
+- **조준/시점**: 마우스 이동
+- **사격**: 마우스 좌클릭 (데미지: 10)
+- **목표**: 체력 100인 AI 적을 10번 맞춰 처치
+""")
+
+# 2. HTML / JavaScript / Three.js 3D 게임 임베딩 코드
+game_html = """
 <!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>간단한 3D FPS 게임</title>
   <style>
     body {
       margin: 0;
       overflow: hidden;
       font-family: sans-serif;
+      background-color: #000;
     }
-    /* 크로스헤어(십자선) */
+    /* Crosshair */
     #crosshair {
       position: absolute;
       top: 50%;
@@ -21,20 +43,22 @@
       border-radius: 50%;
       background-color: red;
       pointer-events: none;
+      z-index: 10;
     }
-    /* UI (적 체력 표시) */
+    /* UI (적 체력) */
     #ui {
       position: absolute;
       top: 20px;
       left: 20px;
       color: white;
       font-size: 20px;
-      background: rgba(0, 0, 0, 0.5);
+      background: rgba(0, 0, 0, 0.6);
       padding: 10px 20px;
       border-radius: 5px;
       pointer-events: none;
+      z-index: 10;
     }
-    /* 시작 안내 화면 */
+    /* 시작 화면 안내 */
     #instructions {
       position: absolute;
       width: 100%;
@@ -47,9 +71,9 @@
       align-items: center;
       font-size: 24px;
       cursor: pointer;
+      z-index: 20;
     }
   </style>
-  <!-- Three.js 및 PointerLockControls 라이브러리 -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
 </head>
@@ -58,12 +82,12 @@
   <div id="crosshair"></div>
   <div id="ui">적 체력: <span id="hp">100</span> / 100</div>
   <div id="instructions">
-    <p>클릭하여 게임 시작</p>
-    <p style="font-size: 16px;">이동: WASD | 사격: 마우스 좌클릭 | 화면 전환: 마우스 이동</p>
+    <p>⚡ 이 화면을 클릭하여 게임을 시작하세요 ⚡</p>
+    <p style="font-size: 16px; color: #ccc;">(ESC 키를 누르면 마우스 커서가 해제됩니다)</p>
   </div>
 
   <script>
-    // 1. 기본 씬, 카메라, 렌더러 설정
+    // 1. Scene / Camera / Renderer
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x87ceeb); // 하늘색
 
@@ -72,13 +96,13 @@
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // 조명 추가
+    // Light
     const light = new THREE.DirectionalLight(0xffffff, 1);
     light.position.set(10, 20, 10);
     scene.add(light);
     scene.add(new THREE.AmbientLight(0x404040));
 
-    // 바닥 생성
+    // Floor
     const floorGeometry = new THREE.PlaneGeometry(100, 100);
     const floorMaterial = new THREE.MeshBasicMaterial({ color: 0x228b22, side: THREE.DoubleSide });
     const floor = new THREE.Mesh(floorGeometry, floorMaterial);
@@ -90,10 +114,10 @@
     const enemyGeometry = new THREE.BoxGeometry(2, 4, 2);
     const enemyMaterial = new THREE.MeshLambertMaterial({ color: 0xff0000 });
     const enemy = new THREE.Mesh(enemyGeometry, enemyMaterial);
-    enemy.position.set(0, 2, -15); // 플레이어 정면에 배치
+    enemy.position.set(0, 2, -15);
     scene.add(enemy);
 
-    // 3. 컨트롤 및 입력 처리 (WASD + 마우스 시점 전환)
+    // 3. 컨트롤 및 시점 (PointerLock)
     const controls = new THREE.PointerLockControls(camera, document.body);
     const instructions = document.getElementById('instructions');
 
@@ -109,9 +133,9 @@
       instructions.style.display = 'flex';
     });
 
-    // WASD 이동 키 상태
+    // WASD 키 상태
     const moveState = { forward: false, backward: false, left: false, right: false };
-    
+
     document.addEventListener('keydown', (e) => {
       switch (e.code) {
         case 'KeyW': moveState.forward = true; break;
@@ -130,37 +154,33 @@
       }
     });
 
-    // 4. 발사 기능 (마우스 좌클릭) - Raycaster 활용
+    // 4. 사격 (Raycaster)
     const raycaster = new THREE.Raycaster();
-    
-    document.addEventListener('mousedown', (e) => {
-      if (!controls.isLocked || e.button !== 0) return; // 포인터가 잠겨있고 좌클릭일 때만 실행
 
-      // 카메라 중심에서 화면 정면으로 레이(광선) 발사
+    document.addEventListener('mousedown', (e) => {
+      if (!controls.isLocked || e.button !== 0) return;
+
       raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
       const intersects = raycaster.intersectObject(enemy);
 
       if (intersects.length > 0 && enemyHP > 0) {
-        // 적에 적중 시 데미지 10 적용
         enemyHP -= 10;
         document.getElementById('hp').innerText = enemyHP;
 
-        // 적 피격 시 피드백 (잠시 하얗게 변함)
+        // 피격 시 잠시 하얗게 깜빡임
         enemy.material.color.setHex(0xffffff);
         setTimeout(() => enemy.material.color.setHex(0xff0000), 100);
 
-        // 체력이 0 이하가 되면 적 처치
         if (enemyHP <= 0) {
           scene.remove(enemy);
-          document.getElementById('ui').innerText = "적 처치 완료!";
+          document.getElementById('ui').innerText = "🎉 적 처치 완료!";
         }
       }
     });
 
-    // 초기 카메라 위치
     camera.position.y = 2;
 
-    // 5. 게임 루프 (이동 및 간단한 AI 루틴)
+    // 5. Game Loop
     const clock = new THREE.Clock();
 
     function animate() {
@@ -169,7 +189,6 @@
       const delta = clock.getDelta();
       const moveSpeed = 10.0 * delta;
 
-      // WASD 이동
       if (controls.isLocked) {
         if (moveState.forward) controls.moveForward(moveSpeed);
         if (moveState.backward) controls.moveForward(-moveSpeed);
@@ -177,11 +196,9 @@
         if (moveState.right) controls.moveRight(moveSpeed);
       }
 
-      // 간단한 AI: 적이 살아있을 경우 플레이어를 천천히 바라보고 다가옴
+      // 간단한 AI (플레이어 추적)
       if (enemyHP > 0) {
         enemy.lookAt(camera.position.x, enemy.position.y, camera.position.z);
-        
-        // 플레이어와의 거리가 3 이상일 때 다가옴
         const distance = enemy.position.distanceTo(camera.position);
         if (distance > 3) {
           enemy.translateZ(1.5 * delta);
@@ -193,7 +210,6 @@
 
     animate();
 
-    // 창 크기 변경 대응
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
@@ -202,3 +218,7 @@
   </script>
 </body>
 </html>
+"""
+
+# 3. Streamlit 화면에 렌더링 (높이 700px 설정)
+components.html(game_html, height=700)
