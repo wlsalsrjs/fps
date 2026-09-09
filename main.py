@@ -1,24 +1,26 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-# 1. 스트림릿 페이지 기본 설정
 st.set_page_config(
     page_title="Streamlit 3D FPS Game",
-    page_icon="🎮",
+    page_icon="🔫",
     layout="wide"
 )
 
-# 사이드바 및 UI 타이틀
-st.title("🎮 Streamlit 3D FPS Game")
-st.sidebar.header("게임 조작법")
+st.title("🔫 Streamlit 3D FPS Game")
+st.sidebar.header("🎮 게임 조작법")
 st.sidebar.markdown("""
 - **이동**: `W`, `A`, `S`, `D`
 - **조준/시점**: 마우스 이동
-- **사격**: 마우스 좌클릭 (데미지: 10)
-- **목표**: 체력 100인 AI 적을 10번 맞춰 처치
+- **사격**: 마우스 좌클릭
+- **데미지 시스템**:
+  - **몸통/사지**: `10` 데미지
+  - **머리(헤드샷)**: `20` 데미지 (5대면 처치!)
+- **맵 요소**:
+  - 사람 형태의 적 & 플레이어 손/총기
+  - 엄폐물(벽/기둥) 및 오를 수 있는 경사로(Ramp)
 """)
 
-# 2. HTML / JavaScript / Three.js 3D 게임 임베딩 코드
 game_html = """
 <!DOCTYPE html>
 <html lang="ko">
@@ -29,9 +31,9 @@ game_html = """
       margin: 0;
       overflow: hidden;
       font-family: sans-serif;
-      background-color: #000;
+      background-color: #d3d3d3;
+      user-select: none;
     }
-    /* Crosshair */
     #crosshair {
       position: absolute;
       top: 50%;
@@ -45,25 +47,29 @@ game_html = """
       pointer-events: none;
       z-index: 10;
     }
-    /* UI (적 체력) */
     #ui {
       position: absolute;
       top: 20px;
       left: 20px;
       color: white;
       font-size: 20px;
+      font-weight: bold;
       background: rgba(0, 0, 0, 0.6);
       padding: 10px 20px;
       border-radius: 5px;
       pointer-events: none;
       z-index: 10;
     }
-    /* 시작 화면 안내 */
+    #hit-log {
+      color: #ffcc00;
+      font-size: 16px;
+      margin-top: 5px;
+    }
     #instructions {
       position: absolute;
       width: 100%;
       height: 100%;
-      background: rgba(0,0,0,0.7);
+      background: rgba(0,0,0,0.6);
       color: white;
       display: flex;
       flex-direction: column;
@@ -80,48 +86,149 @@ game_html = """
 <body>
 
   <div id="crosshair"></div>
-  <div id="ui">적 체력: <span id="hp">100</span> / 100</div>
+  <div id="ui">
+    적 체력: <span id="hp">100</span> / 100
+    <div id="hit-log"></div>
+  </div>
   <div id="instructions">
-    <p>⚡ 이 화면을 클릭하여 게임을 시작하세요 ⚡</p>
-    <p style="font-size: 16px; color: #ccc;">(ESC 키를 누르면 마우스 커서가 해제됩니다)</p>
+    <p>⚡ 화면을 클릭하여 게임 시작 ⚡</p>
+    <p style="font-size: 16px; color: #ccc;">WASD 이동 | 마우스 좌클릭 사격 | ESC 마우스 해제</p>
   </div>
 
   <script>
-    // 1. Scene / Camera / Renderer
+    // 1. 씬, 카메라, 렌더러 (밝은 회색 배경)
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x87ceeb); // 하늘색
+    scene.background = new THREE.Color(0xd3d3d3);
 
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // Light
-    const light = new THREE.DirectionalLight(0xffffff, 1);
-    light.position.set(10, 20, 10);
+    // 조명
+    const light = new THREE.DirectionalLight(0xffffff, 0.9);
+    light.position.set(20, 40, 20);
     scene.add(light);
-    scene.add(new THREE.AmbientLight(0x404040));
+    scene.add(new THREE.AmbientLight(0x606060));
 
-    // Floor
-    const floorGeometry = new THREE.PlaneGeometry(100, 100);
-    const floorMaterial = new THREE.MeshBasicMaterial({ color: 0x228b22, side: THREE.DoubleSide });
-    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
-    floor.rotation.x = Math.PI / 2;
+    // 바닥
+    const floorGeo = new THREE.PlaneGeometry(100, 100);
+    const floorMat = new THREE.MeshLambertMaterial({ color: 0x999999 });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
     scene.add(floor);
 
-    // 2. AI 적 생성 (체력 100)
-    let enemyHP = 100;
-    const enemyGeometry = new THREE.BoxGeometry(2, 4, 2);
-    const enemyMaterial = new THREE.MeshLambertMaterial({ color: 0xff0000 });
-    const enemy = new THREE.Mesh(enemyGeometry, enemyMaterial);
-    enemy.position.set(0, 2, -15);
-    scene.add(enemy);
+    // 충돌 판정용 오브젝트 리스트
+    const collidableObjects = [floor];
 
-    // 3. 컨트롤 및 시점 (PointerLock)
+    // 2. 맵 건축물 (엄폐물 & 경사로)
+    function createMap() {
+      const obstacleMat = new THREE.MeshLambertMaterial({ color: 0x666666 });
+
+      // 엄폐 벽들
+      const wallData = [
+        { w: 8, h: 4, d: 1, x: 0, y: 2, z: -8 },
+        { w: 1, h: 4, d: 8, x: -10, y: 2, z: -10 },
+        { w: 1, h: 4, d: 8, x: 10, y: 2, z: -10 },
+        { w: 6, h: 3, d: 6, x: -6, y: 1.5, z: -18 }
+      ];
+
+      wallData.forEach(data => {
+        const wall = new THREE.Mesh(new THREE.BoxGeometry(data.w, data.h, data.d), obstacleMat);
+        wall.position.set(data.x, data.y, data.z);
+        scene.add(wall);
+        collidableObjects.push(wall);
+      });
+
+      // 경사로 (Ramp)
+      const rampMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
+      
+      const ramp1 = new THREE.Mesh(new THREE.BoxGeometry(6, 0.5, 12), rampMat);
+      ramp1.position.set(12, 2.5, -15);
+      ramp1.rotation.x = Math.PI / 6; // 경사각
+      scene.add(ramp1);
+      collidableObjects.push(ramp1);
+
+      const ramp2 = new THREE.Mesh(new THREE.BoxGeometry(6, 0.5, 12), rampMat);
+      ramp2.position.set(-12, 2.5, -15);
+      ramp2.rotation.x = Math.PI / 6;
+      scene.add(ramp2);
+      collidableObjects.push(ramp2);
+    }
+    createMap();
+
+    // 3. 사람 형태의 적(AI) 생성
+    let enemyHP = 100;
+    const enemyGroup = new THREE.Group();
+    const enemyHitboxes = []; // 사격 판정용
+
+    // 적 캐릭터 파츠 생성 함수
+    function createHumanoidEnemy() {
+      const bodyMat = new THREE.MeshLambertMaterial({ color: 0xcc3333 }); // 빨간 의상
+      const skinMat = new THREE.MeshLambertMaterial({ color: 0xffdbac }); // 살구색 피부
+
+      // 머리 (헤드샷 판정용)
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), skinMat);
+      head.position.set(0, 2.8, 0);
+      head.userData = { part: 'head' };
+      enemyGroup.add(head);
+      enemyHitboxes.push(head);
+
+      // 몸통
+      const torso = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.2, 0.4), bodyMat);
+      torso.position.set(0, 1.9, 0);
+      torso.userData = { part: 'body' };
+      enemyGroup.add(torso);
+      enemyHitboxes.push(torso);
+
+      // 팔/다리
+      const armGeo = new THREE.BoxGeometry(0.25, 1.0, 0.25);
+      const legGeo = new THREE.BoxGeometry(0.3, 1.2, 0.3);
+
+      const leftArm = new THREE.Mesh(armGeo, bodyMat);
+      leftArm.position.set(-0.55, 1.9, 0);
+      leftArm.userData = { part: 'body' };
+      enemyGroup.add(leftArm);
+      enemyHitboxes.push(leftArm);
+
+      const rightArm = new THREE.Mesh(armGeo, bodyMat);
+      rightArm.position.set(0.55, 1.9, 0);
+      rightArm.userData = { part: 'body' };
+      enemyGroup.add(rightArm);
+      enemyHitboxes.push(rightArm);
+
+      const leftLeg = new THREE.Mesh(legGeo, obstacleMat);
+      leftLeg.position.set(-0.2, 0.6, 0);
+      leftLeg.userData = { part: 'body' };
+      enemyGroup.add(leftLeg);
+      enemyHitboxes.push(leftLeg);
+
+      const rightLeg = new THREE.Mesh(legGeo, obstacleMat);
+      rightLeg.position.set(0.2, 0.6, 0);
+      rightLeg.userData = { part: 'body' };
+      enemyGroup.add(rightLeg);
+      enemyHitboxes.push(rightLeg);
+
+      enemyGroup.position.set(0, 0, -20);
+      scene.add(enemyGroup);
+    }
+    createHumanoidEnemy();
+
+    // 4. 플레이어 시점 & 총기 모델링
+    const gunGroup = new THREE.Group();
+    const gunBody = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.15, 0.6), new THREE.MeshLambertMaterial({ color: 0x111111 }));
+    gunBody.position.set(0.3, -0.25, -0.5);
+    gunGroup.add(gunBody);
+    camera.add(gunGroup);
+    scene.add(camera);
+
+    // 5. 컨트롤 & 시작 클릭 보장 이벤트 처리
     const controls = new THREE.PointerLockControls(camera, document.body);
     const instructions = document.getElementById('instructions');
 
+    // iframe 클릭 포커스 강제 이동으로 시작 안 되는 버그 수정
     instructions.addEventListener('click', () => {
+      window.focus();
       controls.lock();
     });
 
@@ -133,9 +240,8 @@ game_html = """
       instructions.style.display = 'flex';
     });
 
-    // WASD 키 상태
+    // 이동 키 처리
     const moveState = { forward: false, backward: false, left: false, right: false };
-
     document.addEventListener('keydown', (e) => {
       switch (e.code) {
         case 'KeyW': moveState.forward = true; break;
@@ -154,54 +260,83 @@ game_html = """
       }
     });
 
-    // 4. 사격 (Raycaster)
+    // 6. 사격 & 헤드샷 판정 시스템
     const raycaster = new THREE.Raycaster();
+    const hitLog = document.getElementById('hit-log');
 
     document.addEventListener('mousedown', (e) => {
-      if (!controls.isLocked || e.button !== 0) return;
+      if (!controls.isLocked || e.button !== 0 || enemyHP <= 0) return;
 
+      // 총기 반동 애니메이션
+      gunGroup.position.z += 0.05;
+      setTimeout(() => gunGroup.position.z -= 0.05, 50);
+
+      // 레이캐스팅 (화면 중앙)
       raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-      const intersects = raycaster.intersectObject(enemy);
+      const intersects = raycaster.intersectObjects(enemyHitboxes);
 
-      if (intersects.length > 0 && enemyHP > 0) {
-        enemyHP -= 10;
+      if (intersects.length > 0) {
+        const hitPart = intersects[0].object.userData.part;
+        let damage = 10;
+
+        if (hitPart === 'head') {
+          damage = 20;
+          hitLog.innerText = "🎯 헤드샷! (20 데미지)";
+          hitLog.style.color = "#ff3333";
+        } else {
+          hitLog.innerText = "💥 피격! (10 데미지)";
+          hitLog.style.color = "#ffcc00";
+        }
+
+        enemyHP = Math.max(0, enemyHP - damage);
         document.getElementById('hp').innerText = enemyHP;
 
-        // 피격 시 잠시 하얗게 깜빡임
-        enemy.material.color.setHex(0xffffff);
-        setTimeout(() => enemy.material.color.setHex(0xff0000), 100);
+        // 적 피격 피드백 (빨갛게 깜빡임)
+        enemyHitboxes.forEach(part => part.material.color.setHex(0xffffff));
+        setTimeout(() => {
+          enemyHitboxes.forEach(part => {
+            if (part.userData.part === 'head') part.material.color.setHex(0xffdbac);
+            else part.material.color.setHex(0xcc3333);
+          });
+        }, 80);
 
         if (enemyHP <= 0) {
-          scene.remove(enemy);
-          document.getElementById('ui').innerText = "🎉 적 처치 완료!";
+          scene.remove(enemyGroup);
+          document.getElementById('ui').innerText = "🏆 적 처치 완료!";
         }
       }
     });
 
-    camera.position.y = 2;
-
-    // 5. Game Loop
+    // 7. 게임 루프 & 단순 물리 (경사로)
+    camera.position.set(0, 2, 0);
     const clock = new THREE.Clock();
 
     function animate() {
       requestAnimationFrame(animate);
 
       const delta = clock.getDelta();
-      const moveSpeed = 10.0 * delta;
+      const moveSpeed = 8.0 * delta;
 
       if (controls.isLocked) {
         if (moveState.forward) controls.moveForward(moveSpeed);
         if (moveState.backward) controls.moveForward(-moveSpeed);
         if (moveState.left) controls.moveRight(-moveSpeed);
         if (moveState.right) controls.moveRight(moveSpeed);
+
+        // 경사로 및 바닥 높이 감지 (간단한 고도 자동 조절)
+        const downRay = new THREE.Raycaster(camera.position, new THREE.Vector3(0, -1, 0), 0, 3);
+        const hits = downRay.intersectObjects(collidableObjects);
+        if (hits.length > 0) {
+          camera.position.y = hits[0].point.y + 2.0;
+        }
       }
 
-      // 간단한 AI (플레이어 추적)
+      // 적 AI (플레이어를 조준하며 가깝게 다가옴)
       if (enemyHP > 0) {
-        enemy.lookAt(camera.position.x, enemy.position.y, camera.position.z);
-        const distance = enemy.position.distanceTo(camera.position);
-        if (distance > 3) {
-          enemy.translateZ(1.5 * delta);
+        enemyGroup.lookAt(camera.position.x, enemyGroup.position.y, camera.position.z);
+        const distance = enemyGroup.position.distanceTo(camera.position);
+        if (distance > 5) {
+          enemyGroup.translateZ(1.2 * delta);
         }
       }
 
@@ -220,5 +355,5 @@ game_html = """
 </html>
 """
 
-# 3. Streamlit 화면에 렌더링 (높이 700px 설정)
-components.html(game_html, height=700)
+# Streamlit Component 파라미터로 iframe 제어 권한을 명시하여 클릭 안 됨 현상 해결
+components.html(game_html, height=720, scrolling=False)
