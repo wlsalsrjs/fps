@@ -10,17 +10,17 @@ st.set_page_config(
 st.title("🔫 Streamlit 3D FPS Game")
 st.sidebar.header("🎮 게임 조작법")
 st.sidebar.markdown("""
-- **시작**: 화면을 **클릭**하여 마우스 커서를 게임 중앙에 고정
+- **마우스 고정**: 게임 화면을 한번 터치/클릭하면 즉시 마우스가 고정됩니다.
 - **마우스 해제**: `ESC` 키
 - **이동**: `W`, `A`, `S`, `D`
 - **사격**: 마우스 좌클릭
-- **피격 시스템**:
+- **데미지 판정**:
   - **머리(헤드샷)**: `20` 데미지
   - **몸통 / 다리**: `10` 데미지
-- **AI 공격**: 적도 플레이어를 인식하고 총을 쏩니다.
-- **물리 엔진**:
-  - 벽, 엄폐물, 중앙 방벽은 통과할 수 없습니다.
-  - 경사로나 높은 곳에서 발을 헛디디면 **아래로 떨어집니다.**
+- **AI 공격**: 적도 플레이어를 추적하여 총을 쏩니다.
+- **물리 법칙**:
+  - 벽, 엄폐물, 중앙 대형 벽은 통과가 불가능합니다.
+  - 경사로나 엄폐물 위에서 발을 헛디디면 아래로 **낙하**합니다.
 """)
 
 game_html = """
@@ -36,6 +36,7 @@ game_html = """
       background-color: #d3d3d3;
       user-select: none;
     }
+    /* 크로스헤어 (조준점) */
     #crosshair {
       position: absolute;
       top: 50%;
@@ -49,6 +50,7 @@ game_html = """
       pointer-events: none;
       z-index: 10;
     }
+    /* 상단 UI (체력 및 상태) */
     #ui {
       position: absolute;
       top: 20px;
@@ -67,20 +69,6 @@ game_html = """
       font-size: 14px;
       margin-top: 6px;
     }
-    #instructions {
-      position: absolute;
-      width: 100%;
-      height: 100%;
-      background: rgba(0,0,0,0.6);
-      color: white;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      font-size: 24px;
-      cursor: pointer;
-      z-index: 20;
-    }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
@@ -91,16 +79,11 @@ game_html = """
   <div id="ui">
     <div>나의 체력: <span id="player-hp" style="color: #00ff00;">100</span> / 100</div>
     <div>적의 체력: <span id="enemy-hp" style="color: #ff4444;">100</span> / 100</div>
-    <div id="hit-log">화면을 클릭하여 게임을 시작하세요. (ESC: 커서 해제)</div>
-  </div>
-
-  <div id="instructions">
-    <p>⚡ 화면을 클릭하여 마우스를 고정하고 시작하세요 ⚡</p>
-    <p style="font-size: 16px; color: #ccc;">WASD: 이동 | 마우스 이동: 시점 전환 | 좌클릭: 사격 | ESC: 커서 고정 해제</p>
+    <div id="hit-log">화면을 클릭하면 시점이 고정되어 바로 시작됩니다 (ESC: 고정 해제)</div>
   </div>
 
   <script>
-    // 1. 씬, 카메라, 렌더러
+    // 1. Scene, Camera, Renderer
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xd3d3d3);
 
@@ -109,37 +92,35 @@ game_html = """
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // 조명
+    // Light
     const light = new THREE.DirectionalLight(0xffffff, 0.9);
     light.position.set(20, 40, 20);
     scene.add(light);
     scene.add(new THREE.AmbientLight(0x606060));
 
-    // 바닥
+    // Floor
     const floorGeo = new THREE.PlaneGeometry(120, 120);
     const floorMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.rotation.x = -Math.PI / 2;
     scene.add(floor);
 
-    // 충돌 판정 오브젝트 목록 (벽, 엄폐물)
     const wallObjects = [];
-    // 발판/경사로 오브젝트 목록 (발밑 높이 감지)
     const groundObjects = [floor];
 
-    // 2. 맵 건축물 (초반 가림막 벽, 엄폐물, 경사로)
+    // 2. Map (중앙 벽, 엄폐물, 경사로)
     function createMap() {
       const obstacleMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
       const mainWallMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
       const rampMat = new THREE.MeshLambertMaterial({ color: 0x666666 });
 
-      // ★ 초반에 서로를 완전히 가려주는 중앙 대형 가림막 벽
+      // 초반 가림막 벽
       const centerWall = new THREE.Mesh(new THREE.BoxGeometry(30, 8, 1), mainWallMat);
       centerWall.position.set(0, 4, -15);
       scene.add(centerWall);
       wallObjects.push(centerWall);
 
-      // 주변 엄폐물 목록
+      // 엄폐물 배치
       const structures = [
         { w: 4, h: 3, d: 1, x: -8, y: 1.5, z: -8 },
         { w: 4, h: 3, d: 1, x: 8, y: 1.5, z: -8 },
@@ -155,10 +136,10 @@ game_html = """
         mesh.position.set(s.x, s.y, s.z);
         scene.add(mesh);
         wallObjects.push(mesh);
-        groundObjects.push(mesh); // 엄폐물 위도 걸어다닐 수 있음
+        groundObjects.push(mesh);
       });
 
-      // 경사로 (Ramp) 2개
+      // 경사로
       const ramp1 = new THREE.Mesh(new THREE.BoxGeometry(5, 0.5, 10), rampMat);
       ramp1.position.set(12, 2.2, -22);
       ramp1.rotation.x = Math.PI / 6;
@@ -173,7 +154,7 @@ game_html = """
     }
     createMap();
 
-    // 3. 사람 형태의 적(AI) 생성
+    // 3. Humanoid AI Enemy
     let enemyHP = 100;
     let playerHP = 100;
     const enemyGroup = new THREE.Group();
@@ -184,21 +165,21 @@ game_html = """
       const skinMat = new THREE.MeshLambertMaterial({ color: 0xffdbac });
       const pantsMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
 
-      // 머리 (헤드샷 20 데미지)
+      // Head
       const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), skinMat);
       head.position.set(0, 2.8, 0);
       head.userData = { part: 'head' };
       enemyGroup.add(head);
       enemyHitboxes.push(head);
 
-      // 몸통
+      // Torso
       const torso = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.2, 0.4), bodyMat);
       torso.position.set(0, 1.9, 0);
       torso.userData = { part: 'body' };
       enemyGroup.add(torso);
       enemyHitboxes.push(torso);
 
-      // 팔/다리
+      // Limbs
       const armGeo = new THREE.BoxGeometry(0.25, 1.0, 0.25);
       const legGeo = new THREE.BoxGeometry(0.3, 1.2, 0.3);
 
@@ -226,29 +207,21 @@ game_html = """
       enemyGroup.add(rightLeg);
       enemyHitboxes.push(rightLeg);
 
-      // 중앙 벽 뒤쪽에 적 배치
       enemyGroup.position.set(0, 0, -28);
       scene.add(enemyGroup);
     }
     createHumanoidEnemy();
 
-    // 4. PointerLockControls (마우스 고정 & ESC 키 해제)
+    // 4. PointerLock Direct Binding (시작 화면 제거)
     const controls = new THREE.PointerLockControls(camera, document.body);
-    const instructions = document.getElementById('instructions');
 
-    instructions.addEventListener('click', () => {
-      controls.lock();
+    // 캔버스 자체를 클릭하면 별도 안내창 없이 바로 마우스 고정
+    renderer.domElement.addEventListener('click', () => {
+      if (!controls.isLocked) {
+        controls.lock();
+      }
     });
 
-    controls.addEventListener('lock', () => {
-      instructions.style.display = 'none';
-    });
-
-    controls.addEventListener('unlock', () => {
-      instructions.style.display = 'flex';
-    });
-
-    // WASD 이동 키 상태
     const moveState = { forward: false, backward: false, left: false, right: false };
     document.addEventListener('keydown', (e) => {
       switch (e.code) {
@@ -268,7 +241,7 @@ game_html = """
       }
     });
 
-    // 5. 플레이어 사격 처리
+    // 5. Shooting (Mouse Left Click)
     const raycaster = new THREE.Raycaster();
     const hitLog = document.getElementById('hit-log');
 
@@ -294,7 +267,6 @@ game_html = """
         enemyHP = Math.max(0, enemyHP - damage);
         document.getElementById('enemy-hp').innerText = enemyHP;
 
-        // 피격 시 흰색 깜빡임
         enemyHitboxes.forEach(part => part.material.color.setHex(0xffffff));
         setTimeout(() => {
           enemyHitboxes.forEach(part => {
@@ -311,60 +283,51 @@ game_html = """
       }
     });
 
-    // 6. 물리 및 충돌 처리 함수
+    // 6. Physics & Collision Systems
     camera.position.set(0, 2, 0);
-    let velocityY = 0; // Y축 속도 (낙하 중력)
+    let velocityY = 0;
     const gravity = 25.0;
 
-    // 벽 통과 방지 체크
     function checkWallCollision(newPos) {
       const playerRadius = 0.6;
       for (let wall of wallObjects) {
         const box = new THREE.Box3().setFromObject(wall);
-        // 플레이어 위치 박스
         const playerBox = new THREE.Box3(
           new THREE.Vector3(newPos.x - playerRadius, newPos.y - 1.5, newPos.z - playerRadius),
           new THREE.Vector3(newPos.x + playerRadius, newPos.y + 0.5, newPos.z + playerRadius)
         );
 
         if (box.intersectsBox(playerBox)) {
-          return true; // 충돌함
+          return true;
         }
       }
       return false;
     }
 
-    // 7. AI 사격 타이머
+    // 7. AI Attack Loop
     let lastAIShotTime = 0;
 
     function aiBehavior(delta) {
       if (enemyHP <= 0 || playerHP <= 0) return;
 
-      // 플레이어를 바라봄
       enemyGroup.lookAt(camera.position.x, enemyGroup.position.y, camera.position.z);
-
       const distance = enemyGroup.position.distanceTo(camera.position);
 
-      // 적과 플레이어 사이에 벽이 있는지 감지 (시야 체크)
       const aiEyePos = enemyGroup.position.clone().add(new THREE.Vector3(0, 2.5, 0));
       const dirToPlayer = camera.position.clone().sub(aiEyePos).normalize();
       
       const sightRay = new THREE.Raycaster(aiEyePos, dirToPlayer, 0, distance);
       const wallIntersects = sightRay.intersectObjects(wallObjects);
 
-      // 벽에 가려지지 않았고 거리가 25 이하일 때
       if (wallIntersects.length === 0) {
-        // 플레이어에게 다가옴
         if (distance > 6) {
           enemyGroup.translateZ(2.5 * delta);
         }
 
-        // 1.2초마다 1발씩 공격
         const now = clock.getElapsedTime();
         if (now - lastAIShotTime > 1.2) {
           lastAIShotTime = now;
 
-          // 10 데미지 입힘
           playerHP = Math.max(0, playerHP - 10);
           document.getElementById('player-hp').innerText = playerHP;
 
@@ -377,12 +340,11 @@ game_html = """
           }
         }
       } else {
-        // 벽 뒤에 숨어있을 경우 플레이어 쪽으로 우회 이동
         enemyGroup.translateZ(1.5 * delta);
       }
     }
 
-    // 8. 메인 게임 루프
+    // 8. Main Game Loop
     const clock = new THREE.Clock();
 
     function animate() {
@@ -393,7 +355,6 @@ game_html = """
       if (controls.isLocked && playerHP > 0) {
         const moveSpeed = 8.0 * delta;
 
-        // 이동 방향 계산
         const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
         forward.y = 0;
         forward.normalize();
@@ -411,14 +372,12 @@ game_html = """
         if (moveVector.lengthSq() > 0) {
           moveVector.normalize().multiplyScalar(moveSpeed);
 
-          // X축 이동 테스트 및 벽 충돌검사
           const targetPosX = camera.position.clone();
           targetPosX.x += moveVector.x;
           if (!checkWallCollision(targetPosX)) {
             camera.position.x = targetPosX.x;
           }
 
-          // Z축 이동 테스트 및 벽 충돌검사
           const targetPosZ = camera.position.clone();
           targetPosZ.z += moveVector.z;
           if (!checkWallCollision(targetPosZ)) {
@@ -426,15 +385,14 @@ game_html = """
           }
         }
 
-        // ★ 낙하 및 중력 구현 (경사로에서 벗어나면 아래로 떨어짐)
+        // 낙하 물리 (Gravity Engine)
         const downRay = new THREE.Raycaster(camera.position, new THREE.Vector3(0, -1, 0), 0, 10);
         const hits = downRay.intersectObjects(groundObjects);
 
         if (hits.length > 0) {
-          const targetY = hits[0].point.y + 2.0; // 발밑 지면으로부터 눈높이(2.0)
+          const targetY = hits[0].point.y + 2.0;
 
           if (camera.position.y > targetY) {
-            // 허공에 떠 있는 상태 -> 낙하 처리
             velocityY -= gravity * delta;
             camera.position.y += velocityY * delta;
 
@@ -443,18 +401,15 @@ game_html = """
               velocityY = 0;
             }
           } else {
-            // 경사로를 타고 올라가는 처리
             camera.position.y = targetY;
             velocityY = 0;
           }
         } else {
-          // 밑에 아무것도 없으면 낭떠러지 낙하
           velocityY -= gravity * delta;
           camera.position.y += velocityY * delta;
         }
       }
 
-      // 적 AI 동작
       aiBehavior(delta);
 
       renderer.render(scene, camera);
